@@ -503,6 +503,9 @@ func (g *Game) Stop() {
 		return
 	}
 
+	// Stop running timers
+	g.stop <- true
+
 	// The game ended!
 	g.Ended = time.Now()
 	g.state = state_ENDED
@@ -564,12 +567,15 @@ func (g *Game) Stop() {
 
 	g.chat.Public(fmt.Sprintf(text_END_WINNER, g.Scores[0].Player.Nick))
 
-	g.stop <- true
+	// Ready for restart!
+	g.state = state_INIT
 
 }
 
 // Leave removes a player after he has left the room.
 func (g *Game) Leave(nick string) {
+
+	// TODO: Quit game if we don't have enough players anymore.
 
 	if g.state == state_INIT || g.state == state_ENDED {
 		return
