@@ -22,14 +22,8 @@ const (
 	// END
 	//
 
-	// Public; player held the bomb the longest.
-	text_END_SUBTLE_WINNER = "Congratulations %s! You've had the bomb most of the time!"
-
-	// Public; player lost.
-	text_END_LOSER = "Looks like %s thought he was holding a booby instead of a bomb! RIP."
-
-	// Public; tell players about the statistics.
-	text_END_DETAILED = "Recruits, detailed statistics have been sent to your supervisors. A winner will be announced soon!"
+	// Public; player held the bomb the longest. (%s = winner nickname)
+	text_END_WINNER = "Congratulations %s! You've won this round!"
 
 	//
 	// HELP (shown during join)

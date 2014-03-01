@@ -3,6 +3,7 @@ package ptb
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -116,6 +117,9 @@ type Game struct {
 	Started time.Time          // Game start time.
 	Ended   time.Time          // Game end time.
 
+	Scores ScoreBoard // Game results, or nil if a game is currently being played.
+	Scorer ScoreCalc  // Function used to calculate scores.
+
 	Turns []*Turn // Complete list of turns for JSON export.
 }
 
@@ -207,6 +211,7 @@ func (g *Game) Start() {
 	g.bomb.throwTime = time.Now()
 	g.Players = make(map[string]*Player)
 	g.Turns = make([]*Turn, 0, 10)
+	g.Scores = make(ScoreBoard, 0, 10)
 	g.state = state_WARMUP
 
 	g.chat.Public(text_START_ATTENTION)
@@ -546,6 +551,19 @@ func (g *Game) Stop() {
 		p.Turns = len(p.turns)
 		p.MeanDuration = p.Duration / time.Duration(p.Turns)
 	}
+
+	if g.Scorer == nil {
+		g.Scorer = ComplexScore
+	}
+
+	for _, p := range g.Players {
+		g.Scores = append(g.Scores, g.Scorer(g, p))
+	}
+
+	sort.Sort(g.Scores)
+
+	g.chat.Public(fmt.Sprintf(text_END_WINNER, g.Scores[0].Player.Nick))
+
 	g.stop <- true
 
 }
