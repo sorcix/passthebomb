@@ -316,7 +316,6 @@ func (g *Game) Join(nick string) {
 	if (g.state != state_WARMUP && g.state != state_PLAYING) || g.Players[s] != nil {
 		return
 	}
-
 	// Initialize new player
 	p := new(Player)
 	p.Nick = nick
@@ -703,7 +702,7 @@ func (g *Game) Decode(sender, message string) {
 		}
 
 	case cmd_PLAYER_LIST:
-		g.PlayerList()
+		go g.PlayerList()
 
 	case cmd_PICK_UP:
 		g.Pickup(sender)
