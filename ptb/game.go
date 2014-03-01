@@ -12,10 +12,6 @@ func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 }
 
-// TODO: Publish events using go channels
-// TODO: Live statuspage over HTTP (websockets?)
-// TODO: Provide a JSON log file with detailed scores and statistics
-
 // Game tweaking
 const (
 	tweak_JOIN_DURATION = 30   // Time to wait for joins in seconds.
@@ -39,7 +35,6 @@ const (
 	state_INIT    = iota // Nothing?
 	state_WARMUP         // Players can join, game is being explained.
 	state_PLAYING        // Bomb is being passed around.
-	state_DEFUSE         // A player is trying to defuse the bomb.
 	state_ENDED          // Game has ended.
 )
 
@@ -58,7 +53,7 @@ type Chat interface {
 	Public(message string)        // Sends a message to all players.
 	Private(nick, message string) // Sends a message to given player.
 	Kick(nick, reason string)     // Kicks a player.
-	Op() bool                     // True if the bot has the power to kick people.
+	IsOperator() bool             // True if the bot has the power to kick people.
 	Ban(nick string) bool         // Ban given nickname.
 	UnBan(nick string)            // Unban given nickname.
 }
@@ -68,20 +63,10 @@ type bomb struct {
 	fake       bool      // Fake bombs do not actually explode
 	defusable  bool      // True if this bomb can be defused
 	wires      []uint8   // Wire functions
-	location   *player   // Player currently holding the bomb
+	location   *Player   // Player currently holding the bomb
 	detonation time.Time // Detonation time
 	throwTime  time.Time // Last time the bomb was thrown
-	defused bool
-}
-
-// time returns the duration since last time it was thrown.
-// The timer is reset to prepare for a next throw.
-func (b *bomb) time() time.Duration {
-	now := time.Now()
-	duration := now.Sub(b.throwTime)
-	b.throwTime = now
-
-	return duration
+	defused    bool
 }
 
 // randomize sets a random detonation time.
@@ -93,55 +78,91 @@ func (b *bomb) randomize(min, max time.Duration) {
 // turn represents a time the player had a bomb.
 // We keep track of actions a certain player does to gather
 // statistics usefull when calculating scores.
-type turn struct {
-	source   *player       // Who threw the bomb to this player?
-	target   *player       // Where did the bomb go after this turn?
-	duration time.Duration // How long did the player keep the bomb?
-	time     time.Time     // When did this turn happen?
-	defused  bool          // Did the player defuse during this turn?
+type Turn struct {
+	source        *Player       // Who threw the bomb to this player?
+	target        *Player       // Where did the bomb go after this turn?
+	Duration      time.Duration // How long did the player keep the bomb?
+	Time          time.Time     // When did this turn happen?
+	DefuseAttempt bool          // Did the player defuse during this turn?
+
+	SourceNick string // Nickname of the source for JSON export.
+	TargetNick string // Nickname of the target for JSON export.
 }
 
 // player represents a single player in the game
-type player struct {
-	nick          string // Actual nickname of this player
-	sanitizedNick string // Sanitized nickname
-	late          bool   // True if this player joined after the game started
-	turns         []*turn
-	current       *turn
-	defuseAttempt bool // True if player already tried to defuse.
-	defused       bool // Player defused!
-	dead bool
-}
+type Player struct {
+	Nick          string  // Actual nickname of this player
+	sanitizedNick string  // Sanitized nickname
+	Late          bool    // True if this player joined after the game started
+	turns         []*Turn // List of turns this player has played.
+	DefuseAttempt bool    // True if player already tried to defuse.
+	Defused       bool    // Player defused!
+	Dead          bool    // Bomb exploded while the player was holding it.
 
-// catch indicates that this player has catched the bomb from another player
-func (p *player) catch(source *player) *turn {
-	source.current.target = p
-
-	t := new(turn)
-	t.source = source
-	t.time = time.Now()
-
-	// Add pointers to the player object
-	p.turns = append(p.turns, t)
-	p.current = t
-
-	return t
+	Duration     time.Duration // Total turn duration for JSON export.
+	MeanDuration time.Duration // Mean turn duration for JSON export.
+	Turns        uint          // Number of turns for JSON export.
 }
 
 // Game represents a single instance of the game.
 type Game struct {
 	bomb    *bomb              // The bomb used in this game
-	players map[string]*player // Players
+	Players map[string]*Player // Players
 	state   uint8              // Game state
-	chat    Chat               // Interface to the chatbox
-	first   *player            // First player to start
+	chat    Chat               // Interface to the chatroom
+	first   *Player            // First player to start
 	stop    chan bool          // Indicates the game ended.
-	started time.Time          // Game start time.
-	ended   time.Time          // Game end time.
+	turn    *Turn              // Current turn, or nil if the bomb was dropped.
+	Started time.Time          // Game start time.
+	Ended   time.Time          // Game end time.
+
+	Turns []*Turn // Complete list of turns for JSON export.
 }
 
-func (g *Game) SetChat(chat Chat) {
+func NewGame(chat Chat) *Game {
+	g := new(Game)
 	g.chat = chat
+
+	return g
+}
+
+func (g *Game) nextTurn(next *Player) {
+
+	// Finalize last turn.
+	if g.turn != nil {
+		g.turn.target = next
+		g.turn.TargetNick = next.Nick
+
+		// Calculate time
+		g.turn.Duration = time.Now().Sub(g.turn.Time)
+		g.turn.source.Duration = g.turn.source.Duration + g.turn.Duration
+	}
+
+	// Bomp dropped, no next turn.
+	if next == nil {
+		g.turn = nil
+		g.bomb.location = nil
+		return
+	}
+
+	last := g.turn.source
+
+	// Initialize new turn
+	g.turn = new(Turn)
+	g.turn.source = last
+	g.turn.SourceNick = last.Nick
+	g.turn.Time = time.Now()
+
+	// Add pointer to the player's turn list.
+	next.turns = append(next.turns, g.turn)
+	g.Turns = append(g.Turns, g.turn)
+
+	// Update bomb location.
+	// TODO: Delete this var and always read location from current turn.
+	g.bomb.location = next
+
+	return
+
 }
 
 // sanitizeNick returns a lowercase version of the nickname, stripped from spaces.
@@ -157,7 +178,7 @@ func (g *Game) IsActive() bool {
 // Start launches the joining timeslot for a new game!
 func (g *Game) Start() {
 
-	if (g.state != state_INIT && g.state != state_ENDED) || g.chat == nil {
+	if g.IsActive() || g.chat == nil {
 		return
 	}
 
@@ -181,10 +202,11 @@ func (g *Game) Start() {
 	}
 
 	// Make sure we reset everything before starting a new game.
-	g.started = time.Now()
+	g.Started = time.Now()
 	g.bomb.detonation = time.Now()
 	g.bomb.throwTime = time.Now()
-	g.players = make(map[string]*player)
+	g.Players = make(map[string]*Player)
+	g.Turns = make([]*Turn, 0, 10)
 	g.state = state_WARMUP
 
 	g.chat.Public(text_START_ATTENTION)
@@ -222,8 +244,8 @@ func (g *Game) explain(tick, duration time.Duration) {
 	case 3:
 		g.chat.Public(text_HELP_DEFUSE)
 	case 4:
-		if len(g.players) >= tweak_MIN_PLAYERS {
-			g.chat.Public(fmt.Sprintf(text_HELP_START, g.first.nick))
+		if len(g.Players) >= tweak_MIN_PLAYERS {
+			g.chat.Public(fmt.Sprintf(text_HELP_START, g.first.Nick))
 		}
 
 	}
@@ -232,14 +254,14 @@ func (g *Game) explain(tick, duration time.Duration) {
 // start is an internal method and starts the actual game after the joining timeslot.
 func (g *Game) start() {
 
-	if len(g.players) < tweak_MIN_PLAYERS {
+	if len(g.Players) < tweak_MIN_PLAYERS {
 		g.chat.Public(text_START_FAIL)
 		g.state = state_INIT
 		return
 	}
 
 	// Send the bomb to the next player!
-	g.first.catch(nil)
+	g.nextTurn(g.first)
 	g.bomb.location = g.first
 
 	g.state = state_PLAYING
@@ -247,7 +269,7 @@ func (g *Game) start() {
 	g.bomb.randomize(tweak_MIN_DURATION*time.Second, tweak_MAX_DURATION*time.Second)
 
 	// Send message.
-	g.chat.Public(fmt.Sprintf(text_START_GO, g.first.nick))
+	g.chat.Public(fmt.Sprintf(text_START_GO, g.first.Nick))
 
 	ticker := time.NewTicker(10 * time.Second)
 
@@ -281,26 +303,26 @@ func (g *Game) Join(nick string) {
 	s := sanitizeNick(nick)
 
 	// Fast path, joining is not allowed or useless.
-	if (g.state != state_WARMUP && g.state != state_PLAYING) || g.players[s] != nil {
+	if (g.state != state_WARMUP && g.state != state_PLAYING) || g.Players[s] != nil {
 		return
 	}
 
 	// Initialize new player
-	p := new(player)
-	p.nick = nick
+	p := new(Player)
+	p.Nick = nick
 	p.sanitizedNick = s
-	p.late = (g.state == state_PLAYING)
-	p.turns = make([]*turn, 0, 5)
+	p.Late = (g.state == state_PLAYING)
+	p.turns = make([]*Turn, 0, 5)
 
 	// Append to player map
-	g.players[s] = p
+	g.Players[s] = p
 
-	if len(g.players) <= 1 {
+	if len(g.Players) <= 1 {
 		g.first = p
 	}
 
 	// Notify everyone if this player joined after the game started
-	if p.late {
+	if p.Late {
 		g.chat.Public(fmt.Sprintf(text_PLAYER_JOINED_LATE, nick))
 	} else {
 		g.chat.Private(nick, text_PLAYER_JOINED)
@@ -323,32 +345,24 @@ func (g *Game) Throw(source, target string) {
 	target = sanitizeNick(target)
 
 	if source == target {
-		g.chat.Public(fmt.Sprintf(text_BOMB_THROWN_SELF, p.nick))
+		g.chat.Public(fmt.Sprintf(text_BOMB_THROWN_SELF, p.Nick))
 		return
 	}
 
 	// Attempt to fetch target
-	t, playing := g.players[target]
-
-	// Calculate how long the current player had the bomb.
-	p.current.duration = g.bomb.time()
+	t, playing := g.Players[target]
 
 	// We can't throw to someone who doesn't play.
 	if !playing {
 		g.chat.Public(fmt.Sprintf(text_BOMB_DROPPED, target))
-
-		// Nobody has the bomb
-		g.bomb.location = nil
-
+		g.nextTurn(nil)
 		return
 	}
 
-	// Send the bomb to the next player!
-	t.catch(p)
-	g.bomb.location = t
+	g.nextTurn(t)
 
 	// Send message.
-	g.chat.Public(fmt.Sprintf(text_BOMB_THROWN, p.nick, t.nick))
+	g.chat.Public(fmt.Sprintf(text_BOMB_THROWN, p.Nick, t.Nick))
 
 	return
 }
@@ -364,19 +378,17 @@ func (g *Game) Pickup(nick string) {
 	nick = sanitizeNick(nick)
 
 	// Attempt to fetch target
-	t, playing := g.players[nick]
+	t, playing := g.Players[nick]
 
 	// Someone who isn't playing can't pick up the bomb.
 	if !playing {
 		return
 	}
 
-	// Send the bomb to the next player!
-	t.catch(nil)
-	g.bomb.location = t
+	g.nextTurn(t)
 
 	// Send message.
-	g.chat.Public(fmt.Sprintf(text_BOMB_PICKED_UP, t.nick))
+	g.chat.Public(fmt.Sprintf(text_BOMB_PICKED_UP, t.Nick))
 
 	return
 }
@@ -395,21 +407,22 @@ func (g *Game) Defuse(nick string) {
 		return
 	}
 
-	if p.defuseAttempt {
-		g.chat.Public(fmt.Sprintf(text_DEFUSE_TRIED, p.nick))
+	// TODO: Duplicate code in Defuse and Cut.
+
+	if p.DefuseAttempt {
+		g.chat.Public(fmt.Sprintf(text_DEFUSE_TRIED, p.Nick))
 		g.state = state_PLAYING
 		return
 	}
 
 	// Check if the bomb can be defused!
 	if !g.bomb.defusable {
-		g.chat.Public(fmt.Sprintf(text_DEFUSE_DISABLED, p.nick))
+		g.chat.Public(fmt.Sprintf(text_DEFUSE_DISABLED, p.Nick))
 		return
 	}
 
 	// Show defuse info message
 	g.chat.Public(fmt.Sprintf(text_DEFUSE, len(g.bomb.wires)))
-	g.state = state_DEFUSE
 
 }
 
@@ -420,7 +433,7 @@ func (g *Game) Cut(nick string, wire uint8) {
 	p := g.bomb.location
 
 	// Fast path
-	if (g.state != state_DEFUSE && g.state != state_PLAYING) || p == nil || p.sanitizedNick != nick || !g.bomb.defusable {
+	if (g.state != state_PLAYING) || p == nil || p.sanitizedNick != nick || !g.bomb.defusable {
 		return
 	}
 
@@ -432,27 +445,27 @@ func (g *Game) Cut(nick string, wire uint8) {
 	}
 	wire = wire - 1
 
-	if p.defuseAttempt {
-		g.chat.Public(fmt.Sprintf(text_DEFUSE_TRIED, p.nick))
+	if p.DefuseAttempt {
+		g.chat.Public(fmt.Sprintf(text_DEFUSE_TRIED, p.Nick))
 		g.state = state_PLAYING
 		return
 	}
 
 	// Mark this player
-	p.defuseAttempt = true
-	p.current.defused = true
+	p.DefuseAttempt = true
+	g.turn.DefuseAttempt = true
 
 	// Check the wire function
 	switch g.bomb.wires[wire] {
 
 	case defuse_SUCCESS:
 		g.bomb.defused = true
-		g.chat.Public(fmt.Sprintf(text_DEFUSE_SUCCESS, p.nick))
+		g.chat.Public(fmt.Sprintf(text_DEFUSE_SUCCESS, p.Nick))
 		g.Stop()
 		return
 
 	case defuse_NOTHING:
-		g.chat.Public(fmt.Sprintf(text_DEFUSE_NOTHING, p.nick))
+		g.chat.Public(fmt.Sprintf(text_DEFUSE_NOTHING, p.Nick))
 
 	case defuse_LESS_TIME:
 		g.bomb.randomize(20*time.Second, 60*time.Second)
@@ -474,7 +487,6 @@ func (g *Game) Cut(nick string, wire uint8) {
 
 	g.bomb.wires[wire] = defuse_CUT
 
-	g.state = state_PLAYING
 	return
 
 }
@@ -482,17 +494,17 @@ func (g *Game) Cut(nick string, wire uint8) {
 // Stop ends the game, bomb explodes or turns out to be fake.
 func (g *Game) Stop() {
 
-	if g.state != state_PLAYING && g.state != state_DEFUSE {
+	if g.state != state_PLAYING {
 		return
 	}
 
 	// The game ended!
-	g.ended = time.Now()
+	g.Ended = time.Now()
 	g.state = state_ENDED
 
 	if !g.bomb.defused {
 
-		g.bomb.location.dead = true
+		g.bomb.location.Dead = true
 
 		// Check if the bomb was lying on the ground at detonation time.
 		if g.bomb.location == nil {
@@ -506,10 +518,10 @@ func (g *Game) Stop() {
 				g.chat.Public(text_BOMB_FAKE)
 			} else if !tweak_KICK || !g.chat.IsOperator() {
 				g.chat.Public(text_BOMB_EXPLODE)
-				g.chat.Public(fmt.Sprintf(text_BOMB_EXPLODE_NOOP, g.bomb.location.nick))
+				g.chat.Public(fmt.Sprintf(text_BOMB_EXPLODE_NOOP, g.bomb.location.Nick))
 			} else {
 
-				if tweak_BAN && g.chat.Ban(g.bomb.location.nick) {
+				if tweak_BAN && g.chat.Ban(g.bomb.location.Nick) {
 
 					// Schedule unban!
 					go func() {
@@ -518,18 +530,16 @@ func (g *Game) Stop() {
 						// Wait for timer to expire
 						<-timer.C
 
-						g.chat.UnBan(g.bomb.location.nick)
+						g.chat.UnBan(g.bomb.location.Nick)
 					}()
 				}
 
-				g.chat.Kick(g.bomb.location.nick, text_BOMB_EXPLODE)
+				g.chat.Kick(g.bomb.location.Nick, text_BOMB_EXPLODE)
 			}
 
 		}
 
 	}
-
-	write(analyse(g))
 
 	g.stop <- true
 
@@ -545,16 +555,16 @@ func (g *Game) Leave(nick string) {
 	nick = sanitizeNick(nick)
 
 	// Attempt to fetch the player
-	p, playing := g.players[nick]
+	p, playing := g.Players[nick]
 
 	// This one isn't playing, couldn't care less.
 	if !playing {
 		return
 	}
 
-	g.chat.Public(fmt.Sprintf(text_PLAYER_LEFT, p.nick))
+	g.chat.Public(fmt.Sprintf(text_PLAYER_LEFT, p.Nick))
 
-	delete(g.players, nick)
+	delete(g.Players, nick)
 
 }
 
@@ -568,35 +578,35 @@ func (g *Game) Rename(old, nick string) {
 	olds := sanitizeNick(old)
 
 	// Attempt to fetch the player
-	p, playing := g.players[olds]
+	p, playing := g.Players[olds]
 
 	// This one isn't playing, couldn't care less.
 	if !playing {
 		return
 	}
 
-	p.nick = nick
+	p.Nick = nick
 	p.sanitizedNick = sanitizeNick(nick)
 
-	delete(g.players, olds)
-	g.players[p.sanitizedNick] = p
+	delete(g.Players, olds)
+	g.Players[p.sanitizedNick] = p
 
-	g.chat.Public(fmt.Sprintf(text_PLAYER_RENAME, old, p.nick))
+	g.chat.Public(fmt.Sprintf(text_PLAYER_RENAME, old, p.Nick))
 
 }
 
 // Players shows a list of current players in the channel.
-func (g *Game) Players() {
+func (g *Game) PlayerList() {
 
-	if g.state != state_PLAYING && g.state != state_DEFUSE {
+	if g.state != state_PLAYING {
 		return
 	}
 
-	players := make([]string, len(g.players))
+	players := make([]string, len(g.Players))
 
 	i := 0
-	for _, player := range g.players {
-		players[i] = player.nick
+	for _, player := range g.Players {
+		players[i] = player.Nick
 		i++
 	}
 
@@ -635,7 +645,7 @@ func (g *Game) Decode(sender, message string) {
 		}
 
 	case cmd_PLAYER_LIST:
-		g.Players()
+		g.PlayerList()
 
 	case cmd_PICK_UP:
 		g.Pickup(sender)
