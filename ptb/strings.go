@@ -54,9 +54,6 @@ const (
 	// Public; Player joins late (%s = nickname)
 	text_PLAYER_JOINED_LATE = "Attention platoon! %s joined the game late!"
 
-	// Public; Player wants to leave (%s = nickname)
-	text_PLAYER_STOPS = "%s, you pussy! We do not leave the war, soldier."
-
 	// Public; Player changed name. (first %s = old nickname, second %s = new nickname)
 	text_PLAYER_RENAME = "Recruits, %s is acting like a complete asshole and is now known as %s!"
 
