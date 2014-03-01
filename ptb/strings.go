@@ -114,7 +114,7 @@ const (
 	text_DEFUSE_DUPLICATE = "You idiot! This wire was already cut.."
 
 	// Public; Timer went down.. Bomb will explode in the next minute.
-	text_DEFUSE_LESS_TIME = "Oh no.. You're still alive, but the timer is going crazy! Bomb is unstable!!"
+	text_DEFUSE_LESS_TIME = "Oh no.. The bomb is ticking faster!"
 
 	// Public; Timer went up..
 	text_DEFUSE_MORE_TIME = "Phew.. The timer seems to have gone up a bit."
