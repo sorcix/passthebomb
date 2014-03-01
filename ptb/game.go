@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -111,6 +112,7 @@ type Game struct {
 	Players map[string]*Player // Players
 	state   uint8              // Game state
 	chat    Chat               // Interface to the chatroom
+	mutex	*sync.Mutex // Mutex for locking game state.
 	first   *Player            // First player to start
 	stop    chan bool          // Indicates the game ended.
 	turn    *Turn              // Current turn, or nil if the bomb was dropped.
@@ -305,6 +307,9 @@ func (g *Game) start() {
 // Players can only join during the warmup or playing states.
 func (g *Game) Join(nick string) {
 
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
 	s := sanitizeNick(nick)
 
 	// Fast path, joining is not allowed or useless.
@@ -338,6 +343,9 @@ func (g *Game) Join(nick string) {
 // Throw sends the bomb to another player.
 // Only the player currently holding the bomb can throw.
 func (g *Game) Throw(source, target string) {
+
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
 
 	source = sanitizeNick(source)
 	p := g.bomb.location
@@ -375,6 +383,9 @@ func (g *Game) Throw(source, target string) {
 // Pickup the bomb if it was on the ground.
 func (g *Game) Pickup(nick string) {
 
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
 	// Fast path
 	if g.state != state_PLAYING || g.bomb.location != nil {
 		return
@@ -403,6 +414,9 @@ func (g *Game) Pickup(nick string) {
 // Once defusing started, a player has to cut a wire, the bomb can no
 // longer be thrown around.
 func (g *Game) Defuse(nick string) {
+
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
 
 	nick = sanitizeNick(nick)
 	p := g.bomb.location
@@ -433,6 +447,9 @@ func (g *Game) Defuse(nick string) {
 
 // Cut tries to cut a wire during defuse.
 func (g *Game) Cut(nick string, wire uint8) {
+
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
 
 	nick = sanitizeNick(nick)
 	p := g.bomb.location
@@ -498,6 +515,9 @@ func (g *Game) Cut(nick string, wire uint8) {
 
 // Stop ends the game, bomb explodes or turns out to be fake.
 func (g *Game) Stop() {
+
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
 
 	if g.state != state_PLAYING {
 		return
@@ -575,6 +595,9 @@ func (g *Game) Stop() {
 // Leave removes a player after he has left the room.
 func (g *Game) Leave(nick string) {
 
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
+
 	// TODO: Quit game if we don't have enough players anymore.
 
 	if g.state == state_INIT || g.state == state_ENDED {
@@ -599,6 +622,9 @@ func (g *Game) Leave(nick string) {
 
 // Rename changes the name of a player.
 func (g *Game) Rename(old, nick string) {
+
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
 
 	if g.state == state_INIT || g.state == state_ENDED {
 		return
@@ -626,6 +652,9 @@ func (g *Game) Rename(old, nick string) {
 
 // Players shows a list of current players in the channel.
 func (g *Game) PlayerList() {
+
+	g.mutex.Lock()
+	defer g.mutex.Unlock()
 
 	if g.state != state_PLAYING {
 		return
