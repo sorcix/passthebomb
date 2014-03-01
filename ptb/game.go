@@ -101,7 +101,7 @@ type Player struct {
 
 	Duration     time.Duration // Total turn duration for JSON export.
 	MeanDuration time.Duration // Mean turn duration for JSON export.
-	Turns        uint          // Number of turns for JSON export.
+	Turns        int           // Number of turns for JSON export.
 }
 
 // Game represents a single instance of the game.
@@ -541,6 +541,11 @@ func (g *Game) Stop() {
 
 	}
 
+	// Calculate statistics
+	for _, p := range g.Players {
+		p.Turns = len(p.turns)
+		p.MeanDuration = p.Duration / time.Duration(p.Turns)
+	}
 	g.stop <- true
 
 }
