@@ -28,8 +28,10 @@ const (
 	tweak_FAKE          = true // Enable fake bombs.
 	tweak_FAKE_CHANCE   = 10   // Chance that a bomb will be fake: 0=never; 99=always.
 	tweak_MIN_PLAYERS   = 4    // Minimum number of players.
-	tweak_BAN           = true // Ban player after explosion. (prevent auto rejoin)
-	tweak_BAN_TIME      = 10   // Ban time in seconds.
+
+	tweak_KICK     = true // Kick player on explosion.
+	tweak_BAN      = true // Ban player after explosion. (prevent auto rejoin)
+	tweak_BAN_TIME = 10   // Ban time in seconds.
 )
 
 // Game states
@@ -502,7 +504,7 @@ func (g *Game) Stop() {
 			// Show message and kick players if we can.
 			if g.bomb.fake {
 				g.chat.Public(text_BOMB_FAKE)
-			} else if !g.chat.Op() {
+			} else if !tweak_KICK || !g.chat.IsOperator() {
 				g.chat.Public(text_BOMB_EXPLODE)
 				g.chat.Public(fmt.Sprintf(text_BOMB_EXPLODE_NOOP, g.bomb.location.nick))
 			} else {
